@@ -1,0 +1,6 @@
+?
+export ccna="'Difference in VOLUME found for accounts 23XXXX AND 1000010000. See Result_vol_check.csv file for details.'"
+export cona="'DATA LOAD FOR CONA DID NOT HAPPEN'"
+export lgy="'DATA LOAD FOR LEGACY DID NOT HAPPEN'"
+export rev_ip1="'DATA LOAD FOR REVIP1 DID NOT HAPPEN'"
+export rev_ip2="'NO Difference found in REV_IP2 Settlement validation. See Rev_IP2_Stlmt_Vldt.csv file for details.'"

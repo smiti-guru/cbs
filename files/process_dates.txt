@@ -1,0 +1,4 @@
+export pst_per_curr="'201708'"
+export pst_per_ytd="'201708'"
+export rpt_ver_cd_curr="'F'"
+export rpt_ver_cd_ytd="'F'"

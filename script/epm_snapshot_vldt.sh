@@ -1,0 +1,427 @@
+#!/bin/ksh
+##########################################################################
+# Name:  epm_snapshot_vldt.sh                                            #
+#                                                                        #
+# Description: Automate snapshot validation                              #
+#                                                                        #
+##########################################################################
+# Date       By   	 Description                                        #
+# __________ __________  ____________________________________            #
+# 10/24/2017 o75907[VJ] QA:CHG0220395 PROD:CHG0219671 RELEASE14 CHANGES  #
+##########################################################################
+
+date +"*** `basename $0` Executing  %Y%m%d %T"
+
+echo "EPM_PGM_DIR is $EPM_PGM_DIR"
+echo "EPM_OUT_DATA_DIR is $EPM_OUT_DATA_DIR"
+echo "EPM_FILE_DIR is $EPM_FILE_DIR"
+echo "EPM_SEC_DIR is $EPM_SEC_DIR"
+echo "EPM_TEMPFILS_DIR is $EPM_TEMPFILS_DIR"
+
+. ${EPM_FILE_DIR}/epm_nonsec.sh
+. ${EPM_FILE_DIR}/process_dates.txt
+
+
+PST_PER=$pst_per_curr
+RUN_TYPE=$rpt_ver_cd_curr
+REC=$(cat ${EPM_FILE_DIR}/email_names.txt | tr -s '\n' ',' )
+
+
+rm -f ${EPM_FILE_DIR}/RESULT_LINE_CORP_SNAPSHOT_CHECK.csv
+rm -f ${EPM_FILE_DIR}/RESULT_INVOICE_CORP_SNAPSHOT_CHECK.csv
+rm -f ${EPM_FILE_DIR}/RESULT_LINE_CORP_DVSTR_SNAPSHOT_CHECK.csv
+rm -f ${EPM_FILE_DIR}/RESULT_INVOICE_CORP_DVSTR_SNAPSHOT_CHECK.csv
+
+bteq << EOFBTEQ
+
+
+.run file $EPM_SEC_FIL;
+
+.set MAXERROR 1
+.set ERRORLEVEL 3624 SEVERITY 0; /* ignore collect statistics error  */
+.set ERROROUT STDOUT
+
+SET QUERY_BAND='UTILITYNAME=BTEQ;OSUSER=${LOGNAME};PROJECT=EPM;PROCESS/REPORT=epm_snapshot_vldt.btq;Job=${TWS_SCHED};' FOR SESSION;
+
+/*
+######################################################
+# LINE_CORP_SNAPSHOT VALIDATION 					 #
+######################################################
+*/
+
+CREATE MULTISET VOLATILE TABLE FINAL_TAB1
+AS
+(
+SEL
+ A.OWNRSHP_ID as OWNRSHP_ID
+,MIN(BK_OF_REC_DT       )    AS MIN_BK_OF_REC_DT
+,MAX(BK_OF_REC_DT       )    AS MAX_BK_OF_REC_DT
+,COUNT(*			    )    AS CNT
+,SUM(QTY                )    AS SUM_QTY                           
+,SUM(WHLSL_PRICE_XTND   )    AS SUM_WHLSL_PRICE_XTND              
+,SUM(ON_INV_DISC        )    AS SUM_ON_INV_DISC                   
+,SUM(OFF_INV_DISC       )    AS SUM_OFF_INV_DISC                  
+,SUM(ON_INV_CMA_DISC    )    AS SUM_ON_INV_CMA_DISC               
+,SUM(ON_INV_CTM_DISC    )    AS SUM_ON_INV_CTM_DISC               
+,SUM(OFF_INV_CMA_DISC   )    AS SUM_OFF_INV_CMA_DISC              
+,SUM(OFF_INV_CTM_DISC   )    AS SUM_OFF_INV_CTM_DISC              
+,SUM(COST_OF_GOODS      )    AS SUM_COST_OF_GOODS                 
+,SUM(COST_OF_GOODS_ADJ 	)    AS	SUM_COST_OF_GOODS_ADJ
+
+FROM
+$dbepmtemp.LINE_CORP_SNAPSHOT A
+INNER JOIN
+$dbepmtables.SENDING_ENTITY B
+ON A.OWNRSHP_ID = B.OWNRSHP_ID 
+GROUP BY 1
+)WITH DATA ON COMMIT PRESERVE ROWS;
+
+.if errorlevel <> 0 then .goto FAILURE
+
+SEL
+A.OWNRSHP_ID,
+MIN(BK_OF_REC_DT),
+MAX(BK_OF_REC_DT),
+COUNT(*)
+FROM
+$dbepmtemp.LINE_CORP_SNAPSHOT A
+INNER JOIN
+$dbepmtables.SENDING_ENTITY B
+ON A.OWNRSHP_ID = B.OWNRSHP_ID 
+GROUP BY 1
+;
+
+.IF ACTIVITYCOUNT <>0 THEN .GOTO DATA_PRSNT1
+
+.REMARK '*** DATA LOAD FOR LINE_CORP_SNAPSHOT DID NOT HAPPEN***'
+
+UPDATE $dbepmtables.EPM_VLDT_TBL 
+SET RETURN_CODE=5 , DESCRIPTION='DATA LOAD FOR LINE_CORP_SNAPSHOT DID NOT HAPPEN'
+WHERE VLDT_NM='LN_SNAP';
+
+.QUIT 0
+
+.LABEL DATA_PRSNT1
+
+.REMARK '*** DATA LOAD COMPLETED FOR LINE_CORP_SNAPSHOT . See RESULT_LINE_CORP_SNAPSHOT_CHECK.csv file for details.***'
+
+UPDATE $dbepmtables.EPM_VLDT_TBL 
+SET RETURN_CODE=1 , DESCRIPTION='DATA LOAD COMPLETED FOR LINE_CORP_SNAPSHOT . See RESULT_LINE_CORP_SNAPSHOT_CHECK.csv file for details.'
+WHERE VLDT_NM='LN_SNAP';	
+
+.OS rm ${EPM_FILE_DIR}/RESULT_LINE_CORP_SNAPSHOT_CHECK.csv;
+
+.EXPORT REPORT FILE = ${EPM_FILE_DIR}/RESULT_LINE_CORP_SNAPSHOT_CHECK.csv;
+.SET WIDTH 300
+.SET TITLEDASHES OFF;
+
+
+	SELECT 'OWNRSHP_ID,MIN_BK_OF_REC_DT,MAX_BK_OF_REC_DT,CNT,SUM_QTY,SUM_WHLSL_PRICE_XTND,SUM_ON_INV_DISC,SUM_OFF_INV_DISC,SUM_ON_INV_CMA_DISC,SUM_ON_INV_CTM_DISC,SUM_OFF_INV_CMA_DISC,SUM_OFF_INV_CTM_DISC,SUM_COST_OF_GOODS,SUM_COST_OF_GOODS_ADJ'(TITLE '');                           
+	
+    SELECT  
+    OWNRSHP_ID||','||                    
+    MIN_BK_OF_REC_DT||','||              
+    MAX_BK_OF_REC_DT||','||              
+    CNT||','||
+    CAST(SUM_QTY              	AS FORMAT '999999999999D9999')||','||
+    CAST(SUM_WHLSL_PRICE_XTND 	AS FORMAT '999999999999D9999')||','||
+    CAST(SUM_ON_INV_DISC      	AS FORMAT '999999999999D9999')||','||
+    CAST(SUM_OFF_INV_DISC     	AS FORMAT '999999999999D9999')||','||
+    CAST(SUM_ON_INV_CMA_DISC  	AS FORMAT '999999999999D9999')||','||
+    CAST(SUM_ON_INV_CTM_DISC  	AS FORMAT '999999999999D9999')||','||
+    CAST(SUM_OFF_INV_CMA_DISC 	AS FORMAT '999999999999D9999')||','||
+    CAST(SUM_OFF_INV_CTM_DISC 	AS FORMAT '999999999999D9999')||','||
+    CAST(SUM_COST_OF_GOODS    	AS FORMAT '999999999999D9999')||','||
+    CAST(SUM_COST_OF_GOODS_ADJ	AS FORMAT '999999999999D9999') (TITLE '')	
+	FROM
+			FINAL_TAB1
+	order by OWNRSHP_ID;
+	
+		
+.EXPORT RESET;
+
+.if errorlevel <> 0 then .goto FAILURE	
+
+/*
+######################################################
+# INVOICE_CORP_SNAPSHOT VALIDATION 					 #
+######################################################
+*/
+
+CREATE MULTISET VOLATILE TABLE FINAL_TAB2
+AS
+(
+SEL
+A.OWNRSHP_ID as OWNRSHP_ID,
+MIN(BK_OF_REC_DT) as MIN_BK_OF_REC_DT,
+MAX(BK_OF_REC_DT) as MAX_BK_OF_REC_DT,
+COUNT(*) as CNT
+FROM
+$dbepmtemp.INVOICE_CORP_SNAPSHOT A
+INNER JOIN
+$dbepmtables.SENDING_ENTITY B
+ON A.OWNRSHP_ID = B.OWNRSHP_ID 
+GROUP BY 1
+)WITH DATA ON COMMIT PRESERVE ROWS;
+
+.if errorlevel <> 0 then .goto FAILURE
+
+SEL
+A.OWNRSHP_ID,
+MIN(BK_OF_REC_DT),
+MAX(BK_OF_REC_DT),
+COUNT(*)
+FROM
+$dbepmtemp.INVOICE_CORP_SNAPSHOT A
+INNER JOIN
+$dbepmtables.SENDING_ENTITY B
+ON A.OWNRSHP_ID = B.OWNRSHP_ID 
+GROUP BY 1
+;
+
+.IF ACTIVITYCOUNT <>0 THEN .GOTO DATA_PRSNT2
+
+.REMARK '*** DATA LOAD FOR INVOICE_CORP_SNAPSHOT DID NOT HAPPEN***'
+
+UPDATE $dbepmtables.EPM_VLDT_TBL 
+SET RETURN_CODE=5 , DESCRIPTION='DATA LOAD FOR INVOICE_CORP_SNAPSHOT DID NOT HAPPEN'
+WHERE VLDT_NM='IN_SNAP';
+
+.QUIT 0
+
+.LABEL DATA_PRSNT2
+
+.REMARK '***DATA LOAD COMPLETED FOR INVOICE_CORP_SNAPSHOT . See RESULT_INVOICE_CORP_SNAPSHOT_CHECK.csv file for details.***'
+
+UPDATE $dbepmtables.EPM_VLDT_TBL 
+SET RETURN_CODE=1 , DESCRIPTION='DATA LOAD COMPLETED FOR INVOICE_CORP_SNAPSHOT . See RESULT_INVOICE_CORP_SNAPSHOT_CHECK.csv file for details.'
+WHERE VLDT_NM='IN_SNAP';		
+
+.OS rm ${EPM_FILE_DIR}/RESULT_INVOICE_CORP_SNAPSHOT_CHECK.csv;
+
+.EXPORT REPORT FILE = ${EPM_FILE_DIR}/RESULT_INVOICE_CORP_SNAPSHOT_CHECK.csv;
+.SET WIDTH 200
+.SET TITLEDASHES OFF;
+
+
+	SELECT 'OWNRSHP_ID,MIN_BK_OF_REC_DT,MAX_BK_OF_REC_DT,CNT'(TITLE '');                           
+	
+    SELECT  
+    OWNRSHP_ID||','||                    
+    MIN_BK_OF_REC_DT||','||              
+    MAX_BK_OF_REC_DT||','||              
+    CNT (TITLE '')                           
+	FROM
+			FINAL_TAB2
+	order by OWNRSHP_ID;
+	
+		
+.EXPORT RESET;
+
+.if errorlevel <> 0 then .goto FAILURE	
+
+/*
+######################################################
+# LINE_CORP_DVSTR_SNAPSHOT VALIDATION 					 #
+######################################################
+*/
+
+CREATE MULTISET VOLATILE TABLE FINAL_TAB3
+AS
+(
+SEL
+ A.OWNRSHP_ID as OWNRSHP_ID
+,MIN(BK_OF_REC_DT       )    AS MIN_BK_OF_REC_DT
+,MAX(BK_OF_REC_DT       )    AS MAX_BK_OF_REC_DT
+,COUNT(*			    )    AS CNT
+,SUM(QTY                )    AS SUM_QTY                           
+,SUM(WHLSL_PRICE_XTND   )    AS SUM_WHLSL_PRICE_XTND              
+,SUM(ON_INV_DISC        )    AS SUM_ON_INV_DISC                   
+,SUM(OFF_INV_DISC       )    AS SUM_OFF_INV_DISC                  
+,SUM(ON_INV_CMA_DISC    )    AS SUM_ON_INV_CMA_DISC               
+,SUM(ON_INV_CTM_DISC    )    AS SUM_ON_INV_CTM_DISC               
+,SUM(OFF_INV_CMA_DISC   )    AS SUM_OFF_INV_CMA_DISC              
+,SUM(OFF_INV_CTM_DISC   )    AS SUM_OFF_INV_CTM_DISC              
+,SUM(COST_OF_GOODS      )    AS SUM_COST_OF_GOODS                 
+,SUM(COST_OF_GOODS_ADJ 	)    AS	SUM_COST_OF_GOODS_ADJ
+FROM
+$dbepmtemp.LINE_CORP_DVSTR_SNAPSHOT A
+INNER JOIN
+$dbepmtables.SENDING_ENTITY B
+ON A.OWNRSHP_ID = B.OWNRSHP_ID 
+GROUP BY 1
+)WITH DATA ON COMMIT PRESERVE ROWS;
+
+.if errorlevel <> 0 then .goto FAILURE
+
+SEL
+A.OWNRSHP_ID,
+MIN(BK_OF_REC_DT),
+MAX(BK_OF_REC_DT),
+COUNT(*)
+FROM
+$dbepmtemp.LINE_CORP_DVSTR_SNAPSHOT A
+INNER JOIN
+$dbepmtables.SENDING_ENTITY B
+ON A.OWNRSHP_ID = B.OWNRSHP_ID 
+GROUP BY 1
+;
+
+.IF ACTIVITYCOUNT <>0 THEN .GOTO DATA_PRSNT3
+
+.REMARK '*** DATA LOAD FOR LINE_CORP_DVSTR_SNAPSHOT DID NOT HAPPEN***'
+
+UPDATE $dbepmtables.EPM_VLDT_TBL 
+SET RETURN_CODE=5 , DESCRIPTION='DATA LOAD FOR LINE_CORP_DVSTR_SNAPSHOT DID NOT HAPPEN'
+WHERE VLDT_NM='LN_DVSTR';
+
+.QUIT 0
+
+.LABEL DATA_PRSNT3	
+
+.REMARK '***DATA LOAD COMPLETED FOR LINE_CORP_DVSTR_SNAPSHOT . See RESULT_LINE_CORP_DVSTR_SNAPSHOT_CHECK.csv file for details.***'
+
+UPDATE $dbepmtables.EPM_VLDT_TBL 
+SET RETURN_CODE=1 , DESCRIPTION='DATA LOAD COMPLETED FOR LINE_CORP_DVSTR_SNAPSHOT . See RESULT_LINE_CORP_DVSTR_SNAPSHOT_CHECK.csv file for details.'
+WHERE VLDT_NM='LN_DVSTR';	
+
+.OS rm ${EPM_FILE_DIR}/RESULT_LINE_CORP_DVSTR_SNAPSHOT_CHECK.csv;
+
+.EXPORT REPORT FILE = ${EPM_FILE_DIR}/RESULT_LINE_CORP_DVSTR_SNAPSHOT_CHECK.csv;
+.SET WIDTH 300
+.SET TITLEDASHES OFF;
+
+
+	SELECT 'OWNRSHP_ID,MIN_BK_OF_REC_DT,MAX_BK_OF_REC_DT,CNT,SUM_QTY,SUM_WHLSL_PRICE_XTND,SUM_ON_INV_DISC,SUM_OFF_INV_DISC,SUM_ON_INV_CMA_DISC,SUM_ON_INV_CTM_DISC,SUM_OFF_INV_CMA_DISC,SUM_OFF_INV_CTM_DISC,SUM_COST_OF_GOODS,SUM_COST_OF_GOODS_ADJ'(TITLE '');                           
+	
+    SELECT  
+    OWNRSHP_ID||','||                    
+    MIN_BK_OF_REC_DT||','||              
+    MAX_BK_OF_REC_DT||','||              
+    CNT||','||
+    CAST(SUM_QTY              	AS FORMAT '999999999999D9999')||','||
+    CAST(SUM_WHLSL_PRICE_XTND 	AS FORMAT '999999999999D9999')||','||
+    CAST(SUM_ON_INV_DISC      	AS FORMAT '999999999999D9999')||','||
+    CAST(SUM_OFF_INV_DISC     	AS FORMAT '999999999999D9999')||','||
+    CAST(SUM_ON_INV_CMA_DISC  	AS FORMAT '999999999999D9999')||','||
+    CAST(SUM_ON_INV_CTM_DISC  	AS FORMAT '999999999999D9999')||','||
+    CAST(SUM_OFF_INV_CMA_DISC 	AS FORMAT '999999999999D9999')||','||
+    CAST(SUM_OFF_INV_CTM_DISC 	AS FORMAT '999999999999D9999')||','||
+    CAST(SUM_COST_OF_GOODS    	AS FORMAT '999999999999D9999')||','||
+    CAST(SUM_COST_OF_GOODS_ADJ	AS FORMAT '999999999999D9999') (TITLE '')	                         
+	FROM
+			FINAL_TAB3
+	order by OWNRSHP_ID;
+	
+		
+.EXPORT RESET;
+
+.if errorlevel <> 0 then .goto FAILURE	
+
+/*
+######################################################
+# INVOICE_CORP_DVSTR_SNAPSHOT VALIDATION 					 #
+######################################################
+*/
+
+CREATE MULTISET VOLATILE TABLE FINAL_TAB4
+AS
+(
+SEL
+A.OWNRSHP_ID as OWNRSHP_ID,
+MIN(BK_OF_REC_DT) as MIN_BK_OF_REC_DT,
+MAX(BK_OF_REC_DT) as MAX_BK_OF_REC_DT,
+COUNT(*) as CNT
+FROM
+$dbepmtemp.INVOICE_CORP_DVSTR_SNAPSHOT A
+INNER JOIN
+$dbepmtables.SENDING_ENTITY B
+ON A.OWNRSHP_ID = B.OWNRSHP_ID 
+GROUP BY 1
+)WITH DATA ON COMMIT PRESERVE ROWS;
+
+.if errorlevel <> 0 then .goto FAILURE
+
+SEL
+A.OWNRSHP_ID,
+MIN(BK_OF_REC_DT),
+MAX(BK_OF_REC_DT),
+COUNT(*)
+FROM
+$dbepmtemp.INVOICE_CORP_DVSTR_SNAPSHOT A
+INNER JOIN
+$dbepmtables.SENDING_ENTITY B
+ON A.OWNRSHP_ID = B.OWNRSHP_ID 
+GROUP BY 1
+;
+
+.IF ACTIVITYCOUNT <>0 THEN .GOTO DATA_PRSNT4
+
+.REMARK '*** DATA LOAD FOR INVOICE_CORP_DVSTR_SNAPSHOT DID NOT HAPPEN***'
+
+UPDATE $dbepmtables.EPM_VLDT_TBL 
+SET RETURN_CODE=5 , DESCRIPTION='DATA LOAD FOR INVOICE_CORP_DVSTR_SNAPSHOT DID NOT HAPPEN'
+WHERE VLDT_NM='IN_DVSTR';
+
+.QUIT 0
+
+.LABEL DATA_PRSNT4
+
+.REMARK '***DATA LOAD COMPLETED FOR INVOICE_CORP_DVSTR_SNAPSHOT . See RESULT_INVOICE_CORP_DVSTR_SNAPSHOT_CHECK.csv file for details.***'
+
+UPDATE $dbepmtables.EPM_VLDT_TBL 
+SET RETURN_CODE=1 , DESCRIPTION='DATA LOAD COMPLETED FOR INVOICE_CORP_DVSTR_SNAPSHOT . See RESULT_INVOICE_CORP_DVSTR_SNAPSHOT_CHECK.csv file for details.'
+WHERE VLDT_NM='IN_DVSTR';	
+
+.OS rm ${EPM_FILE_DIR}/RESULT_INVOICE_CORP_DVSTR_SNAPSHOT_CHECK.csv;
+
+.EXPORT REPORT FILE = ${EPM_FILE_DIR}/RESULT_INVOICE_CORP_DVSTR_SNAPSHOT_CHECK.csv;
+.SET WIDTH 200
+.SET TITLEDASHES OFF;
+
+
+	SELECT 'OWNRSHP_ID,MIN_BK_OF_REC_DT,MAX_BK_OF_REC_DT,CNT'(TITLE '');                           
+	
+    SELECT  
+    OWNRSHP_ID||','||                    
+    MIN_BK_OF_REC_DT||','||              
+    MAX_BK_OF_REC_DT||','||              
+    CNT (TITLE '')                           
+	FROM
+			FINAL_TAB4
+	order by OWNRSHP_ID;
+	
+		
+.EXPORT RESET;
+
+.if errorlevel <> 0 then .goto FAILURE	
+
+.QUIT 1
+
+.LABEL FAILURE
+.REMARK '*** BTEQ Error, abending script.***'
+
+.QUIT 99
+
+EOFBTEQ
+
+attachment=("${EPM_FILE_DIR}/RESULT_LINE_CORP_SNAPSHOT_CHECK.csv" "${EPM_FILE_DIR}/RESULT_INVOICE_CORP_SNAPSHOT_CHECK.csv" "${EPM_FILE_DIR}/RESULT_LINE_CORP_DVSTR_SNAPSHOT_CHECK.csv" "${EPM_FILE_DIR}/RESULT_INVOICE_CORP_DVSTR_SNAPSHOT_CHECK.csv" )
+
+pattern='-a '
+param=''
+blank=' '
+
+for i in "${attachment[@]}"
+do
+	if [ -f "$i" ]
+	then
+		param=$param$blank$pattern$i
+fi
+done
+
+echo "*** SNAPSHOT VALIDATION. See attached CSV files for details. *** " | mailx -s "EPM Invoice Tables Snapshot for $PST_PER" $param $REC
+
+date +"*** `basename $0` Completed  %Y%m%d %T"
+
+exit 0
+
